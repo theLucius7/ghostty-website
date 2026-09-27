@@ -217,3 +217,59 @@ AcceptEnv COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION
 This is a property of the remote host, not Ghostty, and many managed
 or hardened servers will not have it configured. `TERM` itself is
 always forwarded by `ssh` and is not affected by `AcceptEnv`.
+
+## Troubleshooting
+
+### Mouse Reports After a Disconnect
+
+If moving the mouse after an SSH connection ends inserts text such as
+`35;48;1M` at the local shell prompt, a remote application may have
+enabled mouse reporting without getting a chance to disable it before
+the connection ended. The mode remains enabled in the local terminal.
+
+Once SSH has returned to the local shell prompt, press Ctrl+C to discard
+the unwanted input, then disable mouse reporting with:
+
+```sh
+printf '\033[?9;1000;1002;1003;1005;1006;1015;1016l'
+```
+
+For Bash and Zsh, you can define an optional wrapper in your local shell
+configuration to perform this cleanup whenever an SSH command returns:
+
+```bash
+# Run SSH, then disable mouse reporting before returning to the shell.
+ssh_with_mouse_cleanup() {
+  local rc=0
+  ssh "$@" || rc=$?
+
+  if [ -t 1 ]; then
+    printf '\033[?9;1000;1002;1003;1005;1006;1015;1016l'
+  elif [ -t 2 ]; then
+    printf '\033[?9;1000;1002;1003;1005;1006;1015;1016l' >&2
+  fi
+
+  return "$rc"
+}
+```
+
+Start a new shell after saving the function, or define it in your
+current shell. Existing shells do not automatically reload their
+configuration. Connect using:
+
+```sh
+ssh_with_mouse_cleanup user@example.com
+```
+
+The wrapper calls `ssh`, preserving any SSH alias or shell function
+already defined when you add it. It keeps SSH's exit status and only
+writes the cleanup sequence to a terminal, so redirected output is not
+modified. This works with Ghostty 1.3.x as well as tip; it does not
+require `ghostty +ssh`.
+
+<Note>
+  This wrapper disables mouse modes after every SSH invocation, including
+  successful ones. It does not restore the state from before the connection.
+  Use it when returning to a shell prompt where mouse reporting should be
+  off, rather than a program that still needs it.
+</Note>
