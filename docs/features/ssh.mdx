@@ -220,56 +220,77 @@ always forwarded by `ssh` and is not affected by `AcceptEnv`.
 
 ## Troubleshooting
 
-### Mouse Reports After a Disconnect
+### Mouse and Focus Reports After a Disconnect
 
 If moving the mouse after an SSH connection ends inserts text such as
 `35;48;1M` at the local shell prompt, a remote application may have
 enabled mouse reporting without getting a chance to disable it before
 the connection ended. The mode remains enabled in the local terminal.
 
-Once SSH has returned to the local shell prompt, press Ctrl+C to discard
-the unwanted input, then disable mouse reporting with:
+Similarly, `^[[I` and `^[[O` appearing when switching windows are focus
+reports. An application may have left focus reporting (DEC mode 1004)
+enabled. These reports can appear during the next SSH connection attempt
+or while an ordinary command such as `sleep` or `caffeinate` is waiting,
+because the terminal still has reporting enabled. The same problem can
+follow a local application's abnormal exit.
+
+Once you have returned to the local shell prompt, press Ctrl+C to discard
+the unwanted input, then disable mouse and focus reporting with:
 
 ```sh
-printf '\033[?9;1000;1002;1003;1005;1006;1015;1016l'
+printf '\033[?9;1000;1002;1003;1004;1005;1006;1015;1016l'
 ```
 
+This disables the modes without clearing scrollback. Do this before
+starting another command if reports are still appearing. If you cannot
+enter the command on macOS, try holding Shift while right-clicking to open
+Ghostty's context menu, then choose **Reset Terminal**.
+
 For Bash and Zsh, you can define an optional wrapper in your local shell
-configuration to perform this cleanup whenever an SSH command returns:
+configuration to clean up reporting both before an SSH connection attempt
+and when the SSH command returns:
 
 ```bash
-# Run SSH, then disable mouse reporting before returning to the shell.
-ssh_with_mouse_cleanup() {
-  local rc=0
-  ssh "$@" || rc=$?
-
+# Write only to a terminal, keeping redirected SSH output clean.
+disable_input_reporting() {
   if [ -t 1 ]; then
-    printf '\033[?9;1000;1002;1003;1005;1006;1015;1016l'
+    builtin printf '\033[?9;1000;1002;1003;1004;1005;1006;1015;1016l'
   elif [ -t 2 ]; then
-    printf '\033[?9;1000;1002;1003;1005;1006;1015;1016l' >&2
+    builtin printf '\033[?9;1000;1002;1003;1004;1005;1006;1015;1016l' >&2
   fi
+  return 0
+}
 
+# Clean up inherited modes, run SSH, then clean up before returning.
+ssh_with_reporting_cleanup() {
+  local rc=0
+  disable_input_reporting
+  ssh "$@" || rc=$?
+  disable_input_reporting
   return "$rc"
 }
 ```
 
-Start a new shell after saving the function, or define it in your
+Start a new shell after saving the functions, or define them in your
 current shell. Existing shells do not automatically reload their
 configuration. Connect using:
 
 ```sh
-ssh_with_mouse_cleanup user@example.com
+ssh_with_reporting_cleanup user@example.com
 ```
 
 The wrapper calls `ssh`, preserving any SSH alias or shell function
 already defined when you add it. It keeps SSH's exit status and only
 writes the cleanup sequence to a terminal, so redirected output is not
 modified. This works with Ghostty 1.3.x as well as tip; it does not
-require `ghostty +ssh`.
+require `ghostty +ssh`. A remote application can enable the reporting
+modes it needs after the connection starts.
 
 <Note>
-  This wrapper disables mouse modes after every SSH invocation, including
-  successful ones. It does not restore the state from before the connection.
-  Use it when returning to a shell prompt where mouse reporting should be
-  off, rather than a program that still needs it.
+  This wrapper disables mouse and focus modes before and after every SSH
+  invocation when at least one output stream is a terminal. If both standard
+  output and standard error are redirected, cleanup is skipped. It does not
+  restore the state from before the connection. Use it in a local shell
+  where these modes should be off, rather than a shell or program that uses
+  them. It cannot clean up if the wrapper's shell itself is killed.
 </Note>
